@@ -234,7 +234,9 @@ const I18N = {
     needEquipmentName: '請輸入設備名稱。',
     minTotal: '總數量至少為 1。',
     wrongPasscode: '通關密碼不正確。',
-    switchedAdmin: '已切換到管理者模式，可以新增、編輯或刪除設備。'
+    switchedAdmin: '已切換到管理者模式，可以新增、編輯或刪除設備。',
+    confirmReturnMsg: (name, item) => `確定要歸還「${name}」借用的「${item}」嗎？`,
+    confirmReturnGeneric: '確定要執行歸還嗎？'
   },
   en: {
     title: 'Equipment Loan Board',
@@ -280,7 +282,9 @@ const I18N = {
     needEquipmentName: 'Please enter an equipment name.',
     minTotal: 'Total quantity must be at least 1.',
     wrongPasscode: 'Incorrect passcode.',
-    switchedAdmin: 'Switched to admin mode. You can now add, edit, or delete equipment.'
+    switchedAdmin: 'Switched to admin mode. You can now add, edit, or delete equipment.',
+    confirmReturnMsg: (name, item) => `Confirm that "${item}" borrowed by "${name}" has been returned?`,
+    confirmReturnGeneric: 'Confirm this return?'
   }
 };
 
@@ -509,6 +513,9 @@ function bindCardEvents(){
   document.querySelectorAll('[data-return]').forEach(btn=>{
     btn.onclick = async () => {
       const id = btn.getAttribute('data-return');
+      const loan = state.loans.find(l => l.id === id);
+      const msg = loan ? t('confirmReturnMsg')(loan.borrower, loan.itemName) : t('confirmReturnGeneric');
+      if(!window.confirm(msg)) return;
       await postAction('returnLoan', { id });
       render();
     };
