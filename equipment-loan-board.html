@@ -208,7 +208,6 @@ const I18N = {
     deleteEquipment: '刪除設備',
     borrowerNamePlaceholder: '借用人姓名',
     borrowReasonPlaceholder: '借用理由（例如：出差用）',
-    borrowTime: '借用時間（新加坡時間）',
     confirmBorrow: '確認借用',
     noCurrentLoans: '目前沒有人借用',
     returnBtn: '歸還',
@@ -230,9 +229,6 @@ const I18N = {
     updated: '已更新，資料存在你的 Google 試算表（Items / Loans 分頁）。',
     actionFail: '操作失敗，請確認網路連線或 Apps Script 連結。',
     needBorrowerName: '請輸入借用人姓名。',
-    needBorrowTime: '請選擇借用時間。',
-    borrowTimePast: '借用時間不能是過去的時間，請重新選擇。',
-    invalidBorrowTime: '借用時間格式不正確，請重新選擇。',
     qtyExceeds: '借用數量超過可借數量。',
     fullyBorrowedMsg: name => `「${name}」目前已經全部外借，請等候歸還後再試。`,
     needEquipmentName: '請輸入設備名稱。',
@@ -260,7 +256,6 @@ const I18N = {
     deleteEquipment: 'Delete',
     borrowerNamePlaceholder: "Borrower's name",
     borrowReasonPlaceholder: 'Reason (e.g. business trip)',
-    borrowTime: 'Borrow time (Singapore time)',
     confirmBorrow: 'Confirm Borrow',
     noCurrentLoans: 'Not currently borrowed',
     returnBtn: 'Return',
@@ -282,9 +277,6 @@ const I18N = {
     updated: 'Updated. Data is stored in your Google Sheet (Items / Loans tabs).',
     actionFail: 'Action failed. Please check your connection or the Apps Script link.',
     needBorrowerName: "Please enter the borrower's name.",
-    needBorrowTime: 'Please select a borrow time.',
-    borrowTimePast: 'The borrow time cannot be in the past. Please select another time.',
-    invalidBorrowTime: 'The borrow time is invalid. Please select it again.',
     qtyExceeds: 'Requested quantity exceeds what is available.',
     fullyBorrowedMsg: name => `"${name}" is fully borrowed. Please wait until it's returned.`,
     needEquipmentName: 'Please enter an equipment name.',
@@ -336,13 +328,7 @@ async function postAction(action, payload){
     });
     if(!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
-    const data = JSON.parse(text);
-    if(data.error){
-      if(data.state) state = data.state;
-      setStatus(t(data.error) || t('actionFail'), true);
-      return false;
-    }
-    state = data;
+    state = JSON.parse(text);
     setStatus(t('updated'));
     return true;
   }catch(e){
@@ -375,30 +361,6 @@ function fmtDate(ts){
   }).formatToParts(d);
   const value = type => parts.find(part => part.type === type)?.value || '';
   return `${value('year')}/${value('month')}/${value('day')} ${value('hour')}:${value('minute')}`;
-}
-
-function singaporeDateTimeValue(date = new Date()){
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Singapore',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23'
-  }).formatToParts(date);
-  const value = type => parts.find(part => part.type === type)?.value || '';
-  return `${value('year')}-${value('month')}-${value('day')}T${value('hour')}:${value('minute')}`;
-}
-
-function earliestBorrowTime(){
-  const nextMinute = new Date(Math.ceil((Date.now() + 1000) / 60000) * 60000);
-  return singaporeDateTimeValue(nextMinute);
-}
-
-function borrowTimeToTimestamp(value){
-  if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return NaN;
-  return Date.parse(value + ':00+08:00');
 }
 
 function applyStaticText(){
@@ -474,8 +436,6 @@ function render(){
         <div class="borrow-form">
           <input type="text" placeholder="${t('borrowerNamePlaceholder')}" id="borrower-name-${item.id}">
           <input type="text" placeholder="${t('borrowReasonPlaceholder')}" id="borrower-reason-${item.id}">
-          <label style="font-size:11px;color:var(--ink-mute);" for="borrower-time-${item.id}">${t('borrowTime')}</label>
-          <input type="datetime-local" min="${earliestBorrowTime()}" value="${earliestBorrowTime()}" id="borrower-time-${item.id}">
           <div class="form-row">
             <input type="number" min="1" max="${avail}" value="1" id="borrower-qty-${item.id}">
             <button class="btn btn-teal" data-confirm-borrow="${item.id}" style="flex:1;">${t('confirmBorrow')}</button>
@@ -549,25 +509,16 @@ function bindCardEvents(){
       const nameInput = document.getElementById('borrower-name-'+id);
       const reasonInput = document.getElementById('borrower-reason-'+id);
       const qtyInput = document.getElementById('borrower-qty-'+id);
-      const timeInput = document.getElementById('borrower-time-'+id);
       const name = nameInput.value.trim();
       const reason = reasonInput.value.trim();
       const qty = parseInt(qtyInput.value, 10);
-      const borrowAt = borrowTimeToTimestamp(timeInput.value);
       const item = state.items.find(i=>i.id===id);
       const avail = item.total - borrowedQty(id);
       if(!name){ setStatus(t('needBorrowerName'), true); return; }
       if(!qty || qty < 1 || qty > avail){ setStatus(t('qtyExceeds'), true); return; }
-      if(!timeInput.value){ setStatus(t('needBorrowTime'), true); return; }
-      if(!Number.isFinite(borrowAt)){ setStatus(t('invalidBorrowTime'), true); return; }
-      if(borrowAt <= Date.now()){
-        timeInput.min = earliestBorrowTime();
-        setStatus(t('borrowTimePast'), true);
-        return;
-      }
       openBorrowFor = null;
-      const saved = await postAction('addLoan', { itemId:id, itemName:item.name, borrower:name, qty, reason, borrowAt });
-      if(saved) render();
+      await postAction('addLoan', { itemId:id, itemName:item.name, borrower:name, qty, reason });
+      render();
     };
   });
   document.querySelectorAll('[data-return]').forEach(btn=>{
