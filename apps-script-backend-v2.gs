@@ -19,11 +19,16 @@ function itemsSheet_() {
 }
 
 function loansSheet_() {
-  const sheet = getSheet_('Loans', ['id', 'itemId', 'itemName', 'borrower', 'qty', 'reason', 'timestamp', 'status', 'returnedAt']);
-  // timestamp（第 7 欄）和 returnedAt（第 9 欄）在試算表中直接顯示年月日與時間。
+  const sheet = getSheet_('Loans', ['id', 'itemId', 'itemName', 'borrower', 'qty', 'reason', 'timestamp', 'status', 'returnedAt', 'borrowNotifiedAt']);
+  // 為既有 Loans 分頁補上預約借用通知欄位，不影響舊資料。
+  if (!sheet.getRange(1, 10).getValue()) {
+    sheet.getRange(1, 10).setValue('borrowNotifiedAt');
+  }
+  // 日期欄位在試算表中直接顯示年月日與時間。
   const rowCount = Math.max(sheet.getMaxRows() - 1, 1);
   sheet.getRange(2, 7, rowCount, 1).setNumberFormat(DATE_TIME_FORMAT);
   sheet.getRange(2, 9, rowCount, 1).setNumberFormat(DATE_TIME_FORMAT);
+  sheet.getRange(2, 10, rowCount, 1).setNumberFormat(DATE_TIME_FORMAT);
   migrateLegacyTimestamps_(sheet);
   return sheet;
 }
@@ -40,7 +45,7 @@ function migrateLegacyTimestamps_(sheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return;
 
-  [7, 9].forEach(column => {
+  [7, 9, 10].forEach(column => {
     const range = sheet.getRange(2, column, lastRow - 1, 1);
     const values = range.getValues();
     let changed = false;
@@ -128,19 +133,69 @@ function markLoanReturned_(id) {
 // ★ 換成你自己想收通知的 email 地址
 const OWNER_EMAIL = 'chkhoo@tzuchi.my';
 
-function sendBorrowEmail_(p) {
+function sendBorrowEmail_(loanInfo) {
   try {
-    const subject = '【設備借用通知】' + p.borrower + ' 借了「' + p.itemName + '」';
+    const subject = '【設備借用提醒】' + loanInfo.borrower + ' 將借用「' + loanInfo.itemName + '」';
     const lines = [
-      '借用人：' + p.borrower,
-      '設備：' + p.itemName,
-      '數量：' + p.qty,
-      p.reason ? '借用理由：' + p.reason : '（未填寫理由）',
-      '借用時間：' + formatDateTime_(new Date(Number(p.borrowAt)))
+      '借用人：' + loanInfo.borrower,
+      '設備：' + loanInfo.itemName,
+      '數量：' + loanInfo.qty,
+      loanInfo.reason ? '借用理由：' + loanInfo.reason : '（未填寫理由）',
+      '借用時間：' + formatDateTime_(loanInfo.borrowAt)
     ];
     MailApp.sendEmail(OWNER_EMAIL, subject, lines.join('\n'));
+    return true;
   } catch (e) {
-    // 寄信失敗不影響借用紀錄本身的寫入，靜默失敗即可
+    // 寄信失敗時不標記已通知，下次每分鐘檢查會自動重試。
+    return false;
+  }
+}
+
+function ensureBorrowReminderTrigger_() {
+  const handler = 'sendDueBorrowEmails_';
+  const exists = ScriptApp.getProjectTriggers().some(trigger =>
+    trigger.getHandlerFunction() === handler
+  );
+  if (!exists) {
+    ScriptApp.newTrigger(handler).timeBased().everyMinutes(1).create();
+  }
+}
+
+function sendDueBorrowEmails_() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return;
+
+  try {
+    const sheet = loansSheet_();
+    const rows = sheet.getDataRange().getValues();
+    const now = Date.now();
+
+    for (let i = 1; i < rows.length; i++) {
+      const borrowAt = rows[i][6] instanceof Date ? rows[i][6] : new Date(rows[i][6]);
+      const status = rows[i][7] || 'borrowed';
+      const alreadyNotified = Boolean(rows[i][9]);
+
+      if (
+        rows[i][0] &&
+        status === 'borrowed' &&
+        !alreadyNotified &&
+        !Number.isNaN(borrowAt.getTime()) &&
+        borrowAt.getTime() <= now
+      ) {
+        const sent = sendBorrowEmail_({
+          itemName: rows[i][2],
+          borrower: rows[i][3],
+          qty: rows[i][4],
+          reason: rows[i][5],
+          borrowAt: borrowAt
+        });
+        if (sent) {
+          sheet.getRange(i + 1, 10).setValue(new Date());
+        }
+      }
+    }
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -161,6 +216,7 @@ function sendReturnEmail_(loanInfo) {
 }
 
 function doGet(e) {
+  ensureBorrowReminderTrigger_();
   let state = buildState_();
   if (state.items.length === 0) {
     seedDefaults_();
@@ -189,8 +245,8 @@ function doPost(e) {
     if (borrowAt <= Date.now()) {
       return jsonOut_({ error: 'borrowTimePast', state: buildState_() });
     }
-    loansSheet_().appendRow([newId_('l'), p.itemId, p.itemName, p.borrower, p.qty, p.reason || '', new Date(borrowAt), 'borrowed', '']);
-    sendBorrowEmail_(p);
+    ensureBorrowReminderTrigger_();
+    loansSheet_().appendRow([newId_('l'), p.itemId, p.itemName, p.borrower, p.qty, p.reason || '', new Date(borrowAt), 'borrowed', '', '']);
   } else if (action === 'returnLoan') {
     const loanInfo = markLoanReturned_(p.id);
     sendReturnEmail_(loanInfo);
