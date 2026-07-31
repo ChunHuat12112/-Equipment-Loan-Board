@@ -136,7 +136,7 @@ function sendBorrowEmail_(p) {
       '設備：' + p.itemName,
       '數量：' + p.qty,
       p.reason ? '借用理由：' + p.reason : '（未填寫理由）',
-      '時間：' + formatDateTime_(new Date())
+      '借用時間：' + formatDateTime_(new Date(Number(p.borrowAt)))
     ];
     MailApp.sendEmail(OWNER_EMAIL, subject, lines.join('\n'));
   } catch (e) {
@@ -182,7 +182,14 @@ function doPost(e) {
     // 只刪除設備本身，借用歷史紀錄保留在 Loans 分頁，方便日後追查
     deleteRowById_(itemsSheet_(), p.id);
   } else if (action === 'addLoan') {
-    loansSheet_().appendRow([newId_('l'), p.itemId, p.itemName, p.borrower, p.qty, p.reason || '', new Date(), 'borrowed', '']);
+    const borrowAt = Number(p.borrowAt);
+    if (!Number.isFinite(borrowAt)) {
+      return jsonOut_({ error: 'invalidBorrowTime', state: buildState_() });
+    }
+    if (borrowAt <= Date.now()) {
+      return jsonOut_({ error: 'borrowTimePast', state: buildState_() });
+    }
+    loansSheet_().appendRow([newId_('l'), p.itemId, p.itemName, p.borrower, p.qty, p.reason || '', new Date(borrowAt), 'borrowed', '']);
     sendBorrowEmail_(p);
   } else if (action === 'returnLoan') {
     const loanInfo = markLoanReturned_(p.id);
